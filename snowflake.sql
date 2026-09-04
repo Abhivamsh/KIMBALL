@@ -1,0 +1,969 @@
+-- PROJECT 13B
+-- HEALTHCARE ANALYTICS WAREHOUSE
+-- STAR SCHEMA vs SNOWFLAKE SCHEMA
+
+
+-- TASK 1
+-- DATABASE + SCHEMA
+
+
+USE WAREHOUSE COMPUTE_WH;
+
+CREATE OR REPLACE DATABASE HEALTHCARE_DW;
+
+USE DATABASE HEALTHCARE_DW;
+
+CREATE OR REPLACE SCHEMA SCHEMA_COMPARE_LAB;
+
+USE SCHEMA SCHEMA_COMPARE_LAB;
+
+
+
+-- STAGE + FILE FORMAT
+
+CREATE OR REPLACE STAGE HEALTHCARE_STAGE;
+
+LIST @HEALTHCARE_STAGE;
+
+
+CREATE OR REPLACE FILE FORMAT HEALTHCARE_CSV_FORMAT
+    TYPE = CSV
+    SKIP_HEADER = 1
+    FIELD_DELIMITER = ','
+    FIELD_OPTIONALLY_ENCLOSED_BY = '"'
+    SKIP_BLANK_LINES = TRUE
+    TRIM_SPACE = TRUE
+    NULL_IF = ('NULL', 'null', '');
+
+
+
+-- STAGING TABLE 1
+-- HOSPITAL HIERARCHY
+
+CREATE OR REPLACE TABLE STG_HOSPITAL_HIERARCHY (
+    HOSPITAL_ID NUMBER,
+    HOSPITAL_NAME VARCHAR(100),
+    CITY VARCHAR(50),
+    STATE VARCHAR(50),
+    NETWORK_ID NUMBER,
+    NETWORK_NAME VARCHAR(100),
+    NETWORK_DIRECTOR VARCHAR(100)
+);
+
+
+-- STAGING TABLE 2
+-- TREATMENT HIERARCHY
+
+CREATE OR REPLACE TABLE STG_TREATMENT_HIERARCHY (
+    TREATMENT_ID NUMBER,
+    TREATMENT_NAME VARCHAR(100),
+    DIAGNOSIS_GROUP_ID VARCHAR(50),
+    DIAGNOSIS_GROUP_NAME VARCHAR(50),
+    STANDARD_COST NUMBER(12,2)
+);
+
+
+
+-- STAGING TABLE 3
+-- PATIENTS
+
+CREATE OR REPLACE TABLE STG_PATIENTS (
+    PATIENT_ID NUMBER,
+    PATIENT_NAME VARCHAR(100),
+    GENDER VARCHAR(20),
+    AGE NUMBER,
+    CITY VARCHAR(50)
+);
+
+
+
+-- STAGING TABLE 4
+-- INSURANCE CLAIMS
+
+CREATE OR REPLACE TABLE STG_INSURANCE_CLAIMS (
+    CLAIM_ID VARCHAR(50),
+    CLAIM_DATE DATE,
+    PATIENT_ID NUMBER,
+    HOSPITAL_ID NUMBER,
+    TREATMENT_ID NUMBER,
+    CLAIMED_AMOUNT NUMBER(12,2),
+    APPROVED_AMOUNT NUMBER(12,2)
+);
+
+
+
+-- ============================================================
+-- COPY CSV FILES INTO STAGING
+-- ============================================================
+
+COPY INTO STG_HOSPITAL_HIERARCHY
+FROM @HEALTHCARE_STAGE/hospital_hierarchy.csv
+FILE_FORMAT = HEALTHCARE_CSV_FORMAT
+ON_ERROR = 'ABORT_STATEMENT'
+FORCE = TRUE;
+
+
+COPY INTO STG_TREATMENT_HIERARCHY
+FROM @HEALTHCARE_STAGE/treatment_hierarchy.csv
+FILE_FORMAT = HEALTHCARE_CSV_FORMAT
+ON_ERROR = 'ABORT_STATEMENT'
+FORCE = TRUE;
+
+
+COPY INTO STG_PATIENTS
+FROM @HEALTHCARE_STAGE/patients.csv
+FILE_FORMAT = HEALTHCARE_CSV_FORMAT
+ON_ERROR = 'ABORT_STATEMENT'
+FORCE = TRUE;
+
+
+COPY INTO STG_INSURANCE_CLAIMS
+FROM @HEALTHCARE_STAGE/insurance_claims.csv
+FILE_FORMAT = HEALTHCARE_CSV_FORMAT
+ON_ERROR = 'ABORT_STATEMENT'
+FORCE = TRUE;
+
+
+
+-- VALIDATE STAGING RECORD COUNTS
+
+SELECT
+    'STG_HOSPITAL_HIERARCHY' AS TABLE_NAME,
+    COUNT(*) AS RECORD_COUNT
+FROM STG_HOSPITAL_HIERARCHY
+
+UNION ALL
+
+SELECT
+    'STG_TREATMENT_HIERARCHY',
+    COUNT(*)
+FROM STG_TREATMENT_HIERARCHY
+
+UNION ALL
+
+SELECT
+    'STG_PATIENTS',
+    COUNT(*)
+FROM STG_PATIENTS
+
+UNION ALL
+
+SELECT
+    'STG_INSURANCE_CLAIMS',
+    COUNT(*)
+FROM STG_INSURANCE_CLAIMS;
+
+
+
+
+-- STAR SCHEMA
+
+
+-- ============================================================
+-- TASK 2
+-- STAR_DIM_HOSPITAL
+-- ============================================================
+
+CREATE OR REPLACE TABLE STAR_DIM_HOSPITAL (
+    HOSPITAL_KEY NUMBER AUTOINCREMENT PRIMARY KEY,
+    HOSPITAL_ID NUMBER,
+    HOSPITAL_NAME VARCHAR(100),
+    CITY VARCHAR(50),
+    STATE VARCHAR(50),
+    NETWORK_NAME VARCHAR(100),
+    NETWORK_DIRECTOR VARCHAR(100)
+);
+
+
+
+-- ============================================================
+-- TASK 3
+-- STAR_DIM_TREATMENT
+-- ============================================================
+
+CREATE OR REPLACE TABLE STAR_DIM_TREATMENT (
+    TREATMENT_KEY NUMBER AUTOINCREMENT PRIMARY KEY,
+    TREATMENT_ID NUMBER,
+    TREATMENT_NAME VARCHAR(100),
+    DIAGNOSIS_GROUP_NAME VARCHAR(50),
+    STANDARD_COST NUMBER(12,2)
+);
+
+
+
+-- ============================================================
+-- TASK 4
+-- LOAD STAR HOSPITAL DIMENSION
+-- ============================================================
+
+INSERT INTO STAR_DIM_HOSPITAL (
+    HOSPITAL_ID,
+    HOSPITAL_NAME,
+    CITY,
+    STATE,
+    NETWORK_NAME,
+    NETWORK_DIRECTOR
+)
+SELECT
+    HOSPITAL_ID,
+    HOSPITAL_NAME,
+    CITY,
+    STATE,
+    NETWORK_NAME,
+    NETWORK_DIRECTOR
+FROM STG_HOSPITAL_HIERARCHY;
+
+
+
+-- ============================================================
+-- LOAD STAR TREATMENT DIMENSION
+-- ============================================================
+
+INSERT INTO STAR_DIM_TREATMENT (
+    TREATMENT_ID,
+    TREATMENT_NAME,
+    DIAGNOSIS_GROUP_NAME,
+    STANDARD_COST
+)
+SELECT
+    TREATMENT_ID,
+    TREATMENT_NAME,
+    DIAGNOSIS_GROUP_NAME,
+    STANDARD_COST
+FROM STG_TREATMENT_HIERARCHY;
+
+
+
+-- ============================================================
+-- VERIFY STAR DIMENSIONS
+-- ============================================================
+
+SELECT *
+FROM STAR_DIM_HOSPITAL
+ORDER BY HOSPITAL_ID;
+
+
+SELECT *
+FROM STAR_DIM_TREATMENT
+ORDER BY TREATMENT_ID;
+
+
+
+-- ============================================================
+-- TASK 5
+-- STAR_FACT_CLAIMS
+-- ============================================================
+
+CREATE OR REPLACE TABLE STAR_FACT_CLAIMS (
+    CLAIM_KEY NUMBER AUTOINCREMENT PRIMARY KEY,
+
+    CLAIM_ID VARCHAR(50),
+
+    CLAIM_DATE DATE,
+
+    PATIENT_ID NUMBER,
+
+    HOSPITAL_KEY NUMBER,
+
+    TREATMENT_KEY NUMBER,
+
+    CLAIMED_AMOUNT NUMBER(12,2),
+
+    APPROVED_AMOUNT NUMBER(12,2),
+
+    FOREIGN KEY (HOSPITAL_KEY)
+        REFERENCES STAR_DIM_HOSPITAL(HOSPITAL_KEY),
+
+    FOREIGN KEY (TREATMENT_KEY)
+        REFERENCES STAR_DIM_TREATMENT(TREATMENT_KEY)
+);
+
+
+
+-- ============================================================
+-- LOAD STAR FACT
+-- ============================================================
+
+INSERT INTO STAR_FACT_CLAIMS (
+    CLAIM_ID,
+    CLAIM_DATE,
+    PATIENT_ID,
+    HOSPITAL_KEY,
+    TREATMENT_KEY,
+    CLAIMED_AMOUNT,
+    APPROVED_AMOUNT
+)
+SELECT
+
+    c.CLAIM_ID,
+
+    c.CLAIM_DATE,
+
+    c.PATIENT_ID,
+
+    h.HOSPITAL_KEY,
+
+    t.TREATMENT_KEY,
+
+    c.CLAIMED_AMOUNT,
+
+    c.APPROVED_AMOUNT
+
+FROM STG_INSURANCE_CLAIMS c
+
+JOIN STAR_DIM_HOSPITAL h
+    ON c.HOSPITAL_ID = h.HOSPITAL_ID
+
+JOIN STAR_DIM_TREATMENT t
+    ON c.TREATMENT_ID = t.TREATMENT_ID;
+
+
+
+-- ============================================================
+-- VERIFY STAR FACT
+-- ============================================================
+
+SELECT *
+FROM STAR_FACT_CLAIMS
+ORDER BY CLAIM_DATE;
+
+
+
+-- ============================================================
+-- SNOWFLAKE SCHEMA
+-- ============================================================
+
+
+-- ============================================================
+-- TASK 6
+-- NETWORK DIMENSION
+-- ============================================================
+
+CREATE OR REPLACE TABLE SNOW_DIM_NETWORK (
+    NETWORK_KEY NUMBER AUTOINCREMENT PRIMARY KEY,
+    NETWORK_ID NUMBER,
+    NETWORK_NAME VARCHAR(100),
+    NETWORK_DIRECTOR VARCHAR(100)
+);
+
+
+
+-- ============================================================
+-- SNOWFLAKE HOSPITAL DIMENSION
+-- ============================================================
+
+CREATE OR REPLACE TABLE SNOW_DIM_HOSPITAL (
+    HOSPITAL_KEY NUMBER AUTOINCREMENT PRIMARY KEY,
+    HOSPITAL_ID NUMBER,
+    HOSPITAL_NAME VARCHAR(100),
+    CITY VARCHAR(50),
+    STATE VARCHAR(50),
+    NETWORK_KEY NUMBER,
+
+    FOREIGN KEY (NETWORK_KEY)
+        REFERENCES SNOW_DIM_NETWORK(NETWORK_KEY)
+);
+
+
+
+-- ============================================================
+-- TASK 7
+-- DIAGNOSIS GROUP DIMENSION
+-- ============================================================
+
+CREATE OR REPLACE TABLE SNOW_DIM_DIAGNOSIS_GROUP (
+    DIAGNOSIS_GROUP_KEY NUMBER AUTOINCREMENT PRIMARY KEY,
+    DIAGNOSIS_GROUP_ID VARCHAR(50),
+    DIAGNOSIS_GROUP_NAME VARCHAR(50)
+);
+
+
+
+-- ============================================================
+-- SNOWFLAKE TREATMENT DIMENSION
+-- ============================================================
+
+CREATE OR REPLACE TABLE SNOW_DIM_TREATMENT (
+    TREATMENT_KEY NUMBER AUTOINCREMENT PRIMARY KEY,
+    TREATMENT_ID NUMBER,
+    TREATMENT_NAME VARCHAR(100),
+    STANDARD_COST NUMBER(12,2),
+    DIAGNOSIS_GROUP_KEY NUMBER,
+
+    FOREIGN KEY (DIAGNOSIS_GROUP_KEY)
+        REFERENCES SNOW_DIM_DIAGNOSIS_GROUP(DIAGNOSIS_GROUP_KEY)
+);
+
+
+
+-- ============================================================
+-- TASK 8
+-- LOAD NETWORK DIMENSION
+-- ============================================================
+
+INSERT INTO SNOW_DIM_NETWORK (
+    NETWORK_ID,
+    NETWORK_NAME,
+    NETWORK_DIRECTOR
+)
+SELECT DISTINCT
+    NETWORK_ID,
+    NETWORK_NAME,
+    NETWORK_DIRECTOR
+FROM STG_HOSPITAL_HIERARCHY
+ORDER BY NETWORK_ID;
+
+
+
+-- ============================================================
+-- LOAD HOSPITAL DIMENSION
+-- ============================================================
+
+INSERT INTO SNOW_DIM_HOSPITAL (
+    HOSPITAL_ID,
+    HOSPITAL_NAME,
+    CITY,
+    STATE,
+    NETWORK_KEY
+)
+SELECT
+
+    h.HOSPITAL_ID,
+
+    h.HOSPITAL_NAME,
+
+    h.CITY,
+
+    h.STATE,
+
+    n.NETWORK_KEY
+
+FROM STG_HOSPITAL_HIERARCHY h
+
+JOIN SNOW_DIM_NETWORK n
+    ON h.NETWORK_ID = n.NETWORK_ID;
+
+
+
+-- ============================================================
+-- LOAD DIAGNOSIS GROUP DIMENSION
+-- ============================================================
+
+INSERT INTO SNOW_DIM_DIAGNOSIS_GROUP (
+    DIAGNOSIS_GROUP_ID,
+    DIAGNOSIS_GROUP_NAME
+)
+SELECT DISTINCT
+    DIAGNOSIS_GROUP_ID,
+    DIAGNOSIS_GROUP_NAME
+FROM STG_TREATMENT_HIERARCHY
+ORDER BY DIAGNOSIS_GROUP_ID;
+
+
+
+-- ============================================================
+-- LOAD TREATMENT DIMENSION
+-- ============================================================
+
+INSERT INTO SNOW_DIM_TREATMENT (
+    TREATMENT_ID,
+    TREATMENT_NAME,
+    STANDARD_COST,
+    DIAGNOSIS_GROUP_KEY
+)
+SELECT
+
+    t.TREATMENT_ID,
+
+    t.TREATMENT_NAME,
+
+    t.STANDARD_COST,
+
+    d.DIAGNOSIS_GROUP_KEY
+
+FROM STG_TREATMENT_HIERARCHY t
+
+JOIN SNOW_DIM_DIAGNOSIS_GROUP d
+
+    ON t.DIAGNOSIS_GROUP_ID =
+       d.DIAGNOSIS_GROUP_ID;
+
+
+
+-- ============================================================
+-- VERIFY SNOWFLAKE DIMENSIONS
+-- ============================================================
+
+SELECT *
+FROM SNOW_DIM_NETWORK
+ORDER BY NETWORK_ID;
+
+
+SELECT *
+FROM SNOW_DIM_HOSPITAL
+ORDER BY HOSPITAL_ID;
+
+
+SELECT *
+FROM SNOW_DIM_DIAGNOSIS_GROUP
+ORDER BY DIAGNOSIS_GROUP_ID;
+
+
+SELECT *
+FROM SNOW_DIM_TREATMENT
+ORDER BY TREATMENT_ID;
+
+
+
+-- ============================================================
+-- TASK 9
+-- SNOW_FACT_CLAIMS
+-- ============================================================
+
+CREATE OR REPLACE TABLE SNOW_FACT_CLAIMS (
+    CLAIM_KEY NUMBER AUTOINCREMENT PRIMARY KEY,
+
+    CLAIM_ID VARCHAR(50),
+
+    CLAIM_DATE DATE,
+
+    PATIENT_ID NUMBER,
+
+    HOSPITAL_KEY NUMBER,
+
+    TREATMENT_KEY NUMBER,
+
+    CLAIMED_AMOUNT NUMBER(12,2),
+
+    APPROVED_AMOUNT NUMBER(12,2),
+
+    FOREIGN KEY (HOSPITAL_KEY)
+        REFERENCES SNOW_DIM_HOSPITAL(HOSPITAL_KEY),
+
+    FOREIGN KEY (TREATMENT_KEY)
+        REFERENCES SNOW_DIM_TREATMENT(TREATMENT_KEY)
+);
+
+
+
+-- ============================================================
+-- LOAD SNOWFLAKE FACT
+-- ============================================================
+
+INSERT INTO SNOW_FACT_CLAIMS (
+    CLAIM_ID,
+    CLAIM_DATE,
+    PATIENT_ID,
+    HOSPITAL_KEY,
+    TREATMENT_KEY,
+    CLAIMED_AMOUNT,
+    APPROVED_AMOUNT
+)
+SELECT
+
+    c.CLAIM_ID,
+
+    c.CLAIM_DATE,
+
+    c.PATIENT_ID,
+
+    h.HOSPITAL_KEY,
+
+    t.TREATMENT_KEY,
+
+    c.CLAIMED_AMOUNT,
+
+    c.APPROVED_AMOUNT
+
+FROM STG_INSURANCE_CLAIMS c
+
+JOIN SNOW_DIM_HOSPITAL h
+    ON c.HOSPITAL_ID = h.HOSPITAL_ID
+
+JOIN SNOW_DIM_TREATMENT t
+    ON c.TREATMENT_ID = t.TREATMENT_ID;
+
+
+
+-- ============================================================
+-- VERIFY SNOWFLAKE FACT
+-- ============================================================
+
+SELECT *
+FROM SNOW_FACT_CLAIMS
+ORDER BY CLAIM_DATE;
+
+
+
+-- ============================================================
+-- TASK 10
+-- STAR SCHEMA SPECIALTY CLAIMS ANALYSIS
+-- ============================================================
+
+SELECT
+
+    t.DIAGNOSIS_GROUP_NAME,
+
+    SUM(f.CLAIMED_AMOUNT)
+        AS TOTAL_CLAIMED_AMOUNT,
+
+    SUM(f.APPROVED_AMOUNT)
+        AS TOTAL_APPROVED_AMOUNT
+
+FROM STAR_FACT_CLAIMS f
+
+JOIN STAR_DIM_TREATMENT t
+
+    ON f.TREATMENT_KEY = t.TREATMENT_KEY
+
+GROUP BY
+
+    t.DIAGNOSIS_GROUP_NAME
+
+ORDER BY
+
+    t.DIAGNOSIS_GROUP_NAME;
+
+
+
+
+-- ============================================================
+-- TASK 11
+-- SNOWFLAKE SCHEMA SPECIALTY CLAIMS ANALYSIS
+-- ============================================================
+
+SELECT
+
+    d.DIAGNOSIS_GROUP_NAME,
+
+    SUM(f.CLAIMED_AMOUNT)
+        AS TOTAL_CLAIMED_AMOUNT,
+
+    SUM(f.APPROVED_AMOUNT)
+        AS TOTAL_APPROVED_AMOUNT
+
+FROM SNOW_FACT_CLAIMS f
+
+JOIN SNOW_DIM_TREATMENT t
+
+    ON f.TREATMENT_KEY = t.TREATMENT_KEY
+
+JOIN SNOW_DIM_DIAGNOSIS_GROUP d
+
+    ON t.DIAGNOSIS_GROUP_KEY =
+       d.DIAGNOSIS_GROUP_KEY
+
+GROUP BY
+
+    d.DIAGNOSIS_GROUP_NAME
+
+ORDER BY
+
+    d.DIAGNOSIS_GROUP_NAME;
+
+
+
+-- EXPECTED:
+--
+-- Cardiology      | 160000.00 | 150000.00
+-- General Surgery |  98000.00 |  90000.00
+-- Orthopedics     | 230000.00 | 220000.00
+
+
+
+-- ============================================================
+-- TASK 12
+-- HOSPITAL NETWORK DIRECTOR PERFORMANCE
+-- STAR SCHEMA
+-- ============================================================
+
+SELECT
+
+    h.NETWORK_DIRECTOR,
+
+    COUNT(*) AS TOTAL_CLAIMS_HANDLED,
+
+    SUM(f.APPROVED_AMOUNT)
+        AS TOTAL_APPROVED_AMOUNT
+
+FROM STAR_FACT_CLAIMS f
+
+JOIN STAR_DIM_HOSPITAL h
+
+    ON f.HOSPITAL_KEY = h.HOSPITAL_KEY
+
+GROUP BY
+
+    h.NETWORK_DIRECTOR
+
+ORDER BY
+
+    h.NETWORK_DIRECTOR;
+
+
+
+
+
+-- ============================================================
+-- TASK 12
+-- HOSPITAL NETWORK DIRECTOR PERFORMANCE
+-- SNOWFLAKE SCHEMA
+-- ============================================================
+
+SELECT
+
+    n.NETWORK_DIRECTOR,
+
+    COUNT(*) AS TOTAL_CLAIMS_HANDLED,
+
+    SUM(f.APPROVED_AMOUNT)
+        AS TOTAL_APPROVED_AMOUNT
+
+FROM SNOW_FACT_CLAIMS f
+
+JOIN SNOW_DIM_HOSPITAL h
+
+    ON f.HOSPITAL_KEY = h.HOSPITAL_KEY
+
+JOIN SNOW_DIM_NETWORK n
+
+    ON h.NETWORK_KEY = n.NETWORK_KEY
+
+GROUP BY
+
+    n.NETWORK_DIRECTOR
+
+ORDER BY
+
+    n.NETWORK_DIRECTOR;
+
+
+
+-- ============================================================
+-- TASK 13
+-- MASTER DATA UPDATE TEST
+
+
+
+
+UPDATE STAR_DIM_HOSPITAL
+SET NETWORK_DIRECTOR = 'Dr. Anand'
+WHERE NETWORK_NAME = 'Apollo Healthcare Group';
+
+
+-- Verify
+
+SELECT
+    HOSPITAL_ID,
+    HOSPITAL_NAME,
+    NETWORK_NAME,
+    NETWORK_DIRECTOR
+FROM STAR_DIM_HOSPITAL
+WHERE NETWORK_NAME = 'Apollo Healthcare Group'
+ORDER BY HOSPITAL_ID;
+
+
+
+-- Count updated rows
+
+SELECT
+    'Star Schema' AS SCHEMA_TYPE,
+    'STAR_DIM_HOSPITAL' AS UPDATED_TABLE,
+    COUNT(*) AS ROWS_UPDATED,
+    'Higher (Multiple rows)' AS MAINTENANCE_EFFORT
+FROM STAR_DIM_HOSPITAL
+WHERE NETWORK_NAME = 'Apollo Healthcare Group'
+  AND NETWORK_DIRECTOR = 'Dr. Anand';
+
+
+
+-- ------------------------------------------------------------
+-- SNOWFLAKE SCHEMA UPDATE
+--
+-- Network exists only once.
+-- Therefore only 1 row needs updating.
+-- ------------------------------------------------------------
+
+UPDATE SNOW_DIM_NETWORK
+SET NETWORK_DIRECTOR = 'Dr. Anand'
+WHERE NETWORK_ID = 10;
+
+
+-- Verify
+
+SELECT
+    NETWORK_ID,
+    NETWORK_NAME,
+    NETWORK_DIRECTOR
+FROM SNOW_DIM_NETWORK
+WHERE NETWORK_ID = 10;
+
+
+
+-- Count updated rows
+
+SELECT
+    'Snowflake Schema' AS SCHEMA_TYPE,
+    'SNOW_DIM_NETWORK' AS UPDATED_TABLE,
+    COUNT(*) AS ROWS_UPDATED,
+    'Lower (Single row)' AS MAINTENANCE_EFFORT
+FROM SNOW_DIM_NETWORK
+WHERE NETWORK_ID = 10
+  AND NETWORK_DIRECTOR = 'Dr. Anand';
+
+
+
+-- ============================================================
+-- COMBINED MAINTENANCE COMPARISON
+-- ============================================================
+
+SELECT
+
+    'Star Schema' AS SCHEMA_TYPE,
+
+    'STAR_DIM_HOSPITAL' AS UPDATED_TABLE,
+
+    COUNT(*) AS ROWS_UPDATED,
+
+    'Higher (Multiple rows)' AS MAINTENANCE_EFFORT
+
+FROM STAR_DIM_HOSPITAL
+
+WHERE NETWORK_NAME = 'Apollo Healthcare Group'
+
+  AND NETWORK_DIRECTOR = 'Dr. Anand'
+
+
+UNION ALL
+
+
+SELECT
+
+    'Snowflake Schema',
+
+    'SNOW_DIM_NETWORK',
+
+    COUNT(*),
+
+    'Lower (Single row)'
+
+FROM SNOW_DIM_NETWORK
+
+WHERE NETWORK_ID = 10
+
+  AND NETWORK_DIRECTOR = 'Dr. Anand';
+
+
+
+-- ============================================================
+-- TASK 14
+-- FULL ARCHITECTURE AUDIT
+-- ============================================================
+
+SELECT
+
+    'Star Schema' AS SCHEMA_TYPE,
+
+    'STAR_DIM_HOSPITAL' AS TABLE_NAME,
+
+    COUNT(*) AS RECORD_COUNT
+
+FROM STAR_DIM_HOSPITAL
+
+
+UNION ALL
+
+
+SELECT
+
+    'Star Schema',
+
+    'STAR_DIM_TREATMENT',
+
+    COUNT(*)
+
+FROM STAR_DIM_TREATMENT
+
+
+UNION ALL
+
+
+SELECT
+
+    'Star Schema',
+
+    'STAR_FACT_CLAIMS',
+
+    COUNT(*)
+
+FROM STAR_FACT_CLAIMS
+
+
+UNION ALL
+
+
+SELECT
+
+    'Snowflake Schema',
+
+    'SNOW_DIM_NETWORK',
+
+    COUNT(*)
+
+FROM SNOW_DIM_NETWORK
+
+
+UNION ALL
+
+
+SELECT
+
+    'Snowflake Schema',
+
+    'SNOW_DIM_HOSPITAL',
+
+    COUNT(*)
+
+FROM SNOW_DIM_HOSPITAL
+
+
+UNION ALL
+
+
+SELECT
+
+    'Snowflake Schema',
+
+    'SNOW_DIM_DIAGNOSIS_GROUP',
+
+    COUNT(*)
+
+FROM SNOW_DIM_DIAGNOSIS_GROUP
+
+
+UNION ALL
+
+
+SELECT
+
+    'Snowflake Schema',
+
+    'SNOW_DIM_TREATMENT',
+
+    COUNT(*)
+
+FROM SNOW_DIM_TREATMENT
+
+
+UNION ALL
+
+
+SELECT
+
+    'Snowflake Schema',
+
+    'SNOW_FACT_CLAIMS',
+
+    COUNT(*)
+
+FROM SNOW_FACT_CLAIMS;
