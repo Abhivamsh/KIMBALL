@@ -1,0 +1,528 @@
+/* ============================================================
+   PROJECT 14A
+   E-COMMERCE WEB EVENT ANALYTICS
+   DATA LAKE vs DATA WAREHOUSE
+   Snowflake SQL
+  
+
+
+/* ============================================================
+   1. WAREHOUSE / DATABASE / SCHEMA
+   ============================================================ */
+
+USE WAREHOUSE COMPUTE_WH;
+
+CREATE OR REPLACE DATABASE ECOMMERCE_EVENTS_DW;
+
+CREATE OR REPLACE SCHEMA ECOMMERCE_EVENTS_DW.EVENT_ANALYTICS;
+
+USE DATABASE ECOMMERCE_EVENTS_DW;
+
+USE SCHEMA EVENT_ANALYTICS;
+
+
+
+
+CREATE OR REPLACE STAGE ECOMMERCE_EVENT_STAGE;
+
+
+CREATE OR REPLACE FILE FORMAT ECOMMERCE_JSON_FORMAT
+TYPE = JSON
+STRIP_OUTER_ARRAY = TRUE;
+
+
+CREATE OR REPLACE TABLE LAKE_RAW_EVENTS
+(
+    RAW_DATA VARIANT
+);
+
+
+
+COPY INTO LAKE_RAW_EVENTS
+FROM @ECOMMERCE_EVENT_STAGE
+FILE_FORMAT = (
+    FORMAT_NAME = ECOMMERCE_JSON_FORMAT
+)
+ON_ERROR = 'CONTINUE';
+
+
+
+SELECT
+    RAW_DATA
+FROM LAKE_RAW_EVENTS;
+
+
+
+SELECT
+    COUNT(*) AS TOTAL_RAW_RECORD_CT
+FROM LAKE_RAW_EVENTS;
+
+
+
+SELECT
+
+    RAW_DATA:event_id::VARCHAR AS EVENT_ID,
+
+    RAW_DATA:timestamp::TIMESTAMP AS EVENT_TIME,
+
+    RAW_DATA:user_id::NUMBER AS USER_ID,
+
+    RAW_DATA:action::VARCHAR AS ACTION,
+
+    RAW_DATA:order.total::NUMBER(12,2) AS ORDER_TOTAL,
+
+    RAW_DATA:promo_code::VARCHAR AS PROMO_CODE
+
+FROM LAKE_RAW_EVENTS
+
+ORDER BY EVENT_TIME;
+
+
+SELECT
+
+    RAW_DATA:event_id::VARCHAR AS EVENT_ID,
+
+    RAW_DATA:order.total::NUMBER(12,2) AS ORDER_TOTAL,
+
+    RAW_DATA:order.shipping_cost::NUMBER(12,2) AS SHIPPING_COST,
+
+    RAW_DATA:order.tax::NUMBER(12,2) AS TAX,
+
+    COALESCE(
+        RAW_DATA:discount_amount::NUMBER(12,2),
+        0
+    ) AS DISCOUNT_AMOUNT
+
+FROM LAKE_RAW_EVENTS
+
+WHERE RAW_DATA:order.total::NUMBER(12,2) > 0
+
+ORDER BY EVENT_ID;
+
+
+
+
+SELECT
+
+    RAW_DATA:event_id::VARCHAR AS EVENT_ID,
+
+    RAW_DATA:order.total::NUMBER(12,2) AS ORDER_TOTAL,
+
+    RAW_DATA:order.shipping_cost::NUMBER(12,2) AS SHIPPING_COST,
+
+    RAW_DATA:order.tax::NUMBER(12,2) AS TAX,
+
+    COALESCE(
+        RAW_DATA:discount_amount::NUMBER(12,2),
+        0
+    ) AS DISCOUNT_AMOUNT,
+
+    (
+        RAW_DATA:order.total::NUMBER(12,2)
+
+        - COALESCE(
+            RAW_DATA:order.shipping_cost::NUMBER(12,2),
+            0
+          )
+
+        - COALESCE(
+            RAW_DATA:order.tax::NUMBER(12,2),
+            0
+          )
+
+        - COALESCE(
+            RAW_DATA:discount_amount::NUMBER(12,2),
+            0
+          )
+    ) AS NET_REVENUE
+
+FROM LAKE_RAW_EVENTS
+
+WHERE RAW_DATA:order.total::NUMBER(12,2) > 0
+
+ORDER BY EVENT_ID;
+
+
+
+SELECT
+
+    COUNT(*) AS TOTAL_EVENTS,
+
+    COUNT_IF(
+        RAW_DATA:action::VARCHAR = 'purchase'
+        AND
+        RAW_DATA:order.total::NUMBER(12,2) > 0
+    ) AS TOTAL_PURCHASES,
+
+    ROUND(
+
+        100.0 *
+
+        COUNT_IF(
+            RAW_DATA:action::VARCHAR = 'purchase'
+            AND
+            RAW_DATA:order.total::NUMBER(12,2) > 0
+        )
+
+        /
+
+        NULLIF(COUNT(*), 0),
+
+        2
+
+    ) AS CONVERSION_RATE_PCT,
+
+    SUM(
+
+        IFF(
+            RAW_DATA:order.total::NUMBER(12,2) > 0,
+            RAW_DATA:order.total::NUMBER(12,2),
+            0
+        )
+
+    ) AS TOTAL_GROSS_REVENUE,
+
+    ROUND(
+
+        AVG(
+
+            IFF(
+
+                RAW_DATA:action::VARCHAR = 'purchase'
+
+                AND
+
+                RAW_DATA:order.total::NUMBER(12,2) > 0,
+
+                RAW_DATA:order.total::NUMBER(12,2),
+
+                NULL
+
+            )
+
+        ),
+
+        2
+
+    ) AS AVERAGE_ORDER_VALUE
+
+FROM LAKE_RAW_EVENTS;
+
+
+
+
+CREATE OR REPLACE TABLE DW_STRUCTURED_EVENTS
+(
+    EVENT_ID VARCHAR,
+
+    EVENT_TIME TIMESTAMP,
+
+    USER_ID NUMBER,
+
+    PAGE VARCHAR,
+
+    ACTION VARCHAR,
+
+    ORDER_TOTAL NUMBER(12,2),
+
+    SHIPPING_COST NUMBER(12,2),
+
+    TAX NUMBER(12,2),
+
+    ITEMS NUMBER,
+
+    PROMO_CODE VARCHAR,
+
+    DISCOUNT_AMOUNT NUMBER(12,2),
+
+    NET_REVENUE NUMBER(12,2)
+);
+
+
+
+
+INSERT INTO DW_STRUCTURED_EVENTS
+(
+    EVENT_ID,
+
+    EVENT_TIME,
+
+    USER_ID,
+
+    PAGE,
+
+    ACTION,
+
+    ORDER_TOTAL,
+
+    SHIPPING_COST,
+
+    TAX,
+
+    ITEMS,
+
+    PROMO_CODE,
+
+    DISCOUNT_AMOUNT,
+
+    NET_REVENUE
+)
+
+SELECT
+
+    RAW_DATA:event_id::VARCHAR,
+
+    RAW_DATA:timestamp::TIMESTAMP,
+
+    RAW_DATA:user_id::NUMBER,
+
+    RAW_DATA:page::VARCHAR,
+
+    RAW_DATA:action::VARCHAR,
+
+    RAW_DATA:order.total::NUMBER(12,2),
+
+    RAW_DATA:order.shipping_cost::NUMBER(12,2),
+
+    RAW_DATA:order.tax::NUMBER(12,2),
+
+    RAW_DATA:order.items::NUMBER,
+
+    RAW_DATA:promo_code::VARCHAR,
+
+    COALESCE(
+        RAW_DATA:discount_amount::NUMBER(12,2),
+        0
+    ),
+
+    (
+
+        COALESCE(
+            RAW_DATA:order.total::NUMBER(12,2),
+            0
+        )
+
+        -
+
+        COALESCE(
+            RAW_DATA:order.shipping_cost::NUMBER(12,2),
+            0
+        )
+
+        -
+
+        COALESCE(
+            RAW_DATA:order.tax::NUMBER(12,2),
+            0
+        )
+
+        -
+
+        COALESCE(
+            RAW_DATA:discount_amount::NUMBER(12,2),
+            0
+        )
+
+    )
+
+FROM LAKE_RAW_EVENTS;
+
+
+
+SELECT
+
+    COUNT(*) AS STORED_RECORDS_QTY,
+
+    SUM(NET_REVENUE) AS TOTAL_NET_REVENUE
+
+FROM DW_STRUCTURED_EVENTS;
+
+
+
+
+SELECT *
+
+FROM DW_STRUCTURED_EVENTS
+
+ORDER BY EVENT_TIME;
+
+
+
+
+SELECT
+
+    RAW_DATA
+
+FROM LAKE_RAW_EVENTS
+
+WHERE RAW_DATA:event_id IS NULL;
+
+
+
+CREATE OR REPLACE TABLE QUARANTINE_RAW_EVENTS
+(
+    QUARANTINE_ID NUMBER AUTOINCREMENT,
+
+    RAW_RECORD_TEXT VARCHAR,
+
+    REASON VARCHAR,
+
+    QUARANTINED_AT TIMESTAMP
+        DEFAULT CURRENT_TIMESTAMP()
+);
+
+
+
+
+INSERT INTO QUARANTINE_RAW_EVENTS
+(
+    RAW_RECORD_TEXT,
+
+    REASON
+)
+
+SELECT
+
+    RAW_DATA::VARCHAR,
+
+    'MALFORMED_JSON_BODY'
+
+FROM LAKE_RAW_EVENTS
+
+WHERE RAW_DATA:event_id IS NULL;
+
+
+
+SELECT
+
+    QUARANTINE_ID,
+
+    RAW_RECORD_TEXT,
+
+    REASON
+
+FROM QUARANTINE_RAW_EVENTS
+
+ORDER BY QUARANTINE_ID;
+
+
+
+
+/* DATA LAKE */
+
+SELECT
+    COUNT(*) AS LAKE_RECORD_COUNT
+FROM LAKE_RAW_EVENTS;
+
+
+/* DATA WAREHOUSE */
+
+SELECT
+    COUNT(*) AS DW_RECORD_COUNT,
+    SUM(NET_REVENUE) AS TOTAL_NET_REVENUE
+FROM DW_STRUCTURED_EVENTS;
+
+
+/* QUARANTINE */
+
+SELECT
+    COUNT(*) AS QUARANTINE_RECORD_COUNT
+FROM QUARANTINE_RAW_EVENTS;
+
+
+
+SELECT
+
+    'DATA LAKE' AS LAYER,
+
+    COUNT(*) AS RECORD_COUNT
+
+FROM LAKE_RAW_EVENTS
+
+UNION ALL
+
+SELECT
+
+    'DATA WAREHOUSE' AS LAYER,
+
+    COUNT(*) AS RECORD_COUNT
+
+FROM DW_STRUCTURED_EVENTS
+
+UNION ALL
+
+SELECT
+
+    'QUARANTINE' AS LAYER,
+
+    COUNT(*) AS RECORD_COUNT
+
+FROM QUARANTINE_RAW_EVENTS;
+
+
+
+
+SELECT
+
+    EVENT_ID,
+
+    EVENT_TIME,
+
+    USER_ID,
+
+    ORDER_TOTAL,
+
+    DISCOUNT_AMOUNT,
+
+    NET_REVENUE
+
+FROM DW_STRUCTURED_EVENTS
+
+WHERE ACTION = 'purchase'
+
+ORDER BY EVENT_TIME;
+
+
+
+SELECT
+
+    PROMO_CODE,
+
+    COUNT(*) AS EVENT_COUNT,
+
+    SUM(DISCOUNT_AMOUNT) AS TOTAL_DISCOUNT
+
+FROM DW_STRUCTURED_EVENTS
+
+WHERE PROMO_CODE IS NOT NULL
+
+GROUP BY PROMO_CODE
+
+ORDER BY TOTAL_DISCOUNT DESC;
+
+
+
+SELECT
+
+    COUNT(*) AS TOTAL_EVENTS,
+
+    COUNT_IF(ACTION = 'purchase') AS TOTAL_PURCHASES,
+
+    SUM(ORDER_TOTAL) AS TOTAL_GROSS_REVENUE,
+
+    SUM(DISCOUNT_AMOUNT) AS TOTAL_DISCOUNTS,
+
+    SUM(NET_REVENUE) AS TOTAL_NET_REVENUE,
+
+    ROUND(
+        AVG(
+            CASE
+                WHEN ACTION = 'purchase'
+                THEN ORDER_TOTAL
+            END
+        ),
+        2
+    ) AS AVERAGE_ORDER_VALUE
+
+FROM DW_STRUCTURED_EVENTS;
+
